@@ -1,0 +1,7 @@
+env_skin/
+data/
+.DS_Store
+__pycache__/
+*.pyc
+*.pptx
+*.pdf
