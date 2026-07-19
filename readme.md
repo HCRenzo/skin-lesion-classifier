@@ -2,7 +2,7 @@
 
 Clasificación de imágenes dermatoscópicas en 7 tipos de lesión de piel, usando transfer learning sobre un CNN pre-entrenado en ImageNet.
 
-⚠️ **Demo educativo, no una herramienta de diagnóstico médico.** Ver limitaciones en la sección de Resultados.
+**Demo educativo, no una herramienta de diagnóstico médico.** Ver limitaciones en la sección de Resultados.
 
 ## Introducción
 
