@@ -1,0 +1,58 @@
+[
+  {
+    "file": "ISIC_0030341.jpg",
+    "dx": "akiec"
+  },
+  {
+    "file": "ISIC_0026388.jpg",
+    "dx": "akiec"
+  },
+  {
+    "file": "ISIC_0029489.jpg",
+    "dx": "bcc"
+  },
+  {
+    "file": "ISIC_0029201.jpg",
+    "dx": "bcc"
+  },
+  {
+    "file": "ISIC_0027279.jpg",
+    "dx": "bkl"
+  },
+  {
+    "file": "ISIC_0024893.jpg",
+    "dx": "bkl"
+  },
+  {
+    "file": "ISIC_0030870.jpg",
+    "dx": "df"
+  },
+  {
+    "file": "ISIC_0033422.jpg",
+    "dx": "df"
+  },
+  {
+    "file": "ISIC_0027277.jpg",
+    "dx": "mel"
+  },
+  {
+    "file": "ISIC_0033848.jpg",
+    "dx": "mel"
+  },
+  {
+    "file": "ISIC_0028521.jpg",
+    "dx": "nv"
+  },
+  {
+    "file": "ISIC_0033954.jpg",
+    "dx": "nv"
+  },
+  {
+    "file": "ISIC_0029608.jpg",
+    "dx": "vasc"
+  },
+  {
+    "file": "ISIC_0033608.jpg",
+    "dx": "vasc"
+  }
+]

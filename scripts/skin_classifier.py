@@ -2,10 +2,13 @@
 """Lógica compartida: dataset, arquitectura (CNN con transfer learning) y
 carga de modelo. Usado por el script de entrenamiento y la web."""
 
+import base64
+import io
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import requests
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -45,6 +48,23 @@ def find_image_path(image_id: str):
         if p.exists():
             return p
     return None
+
+
+def train_valid_split(df: pd.DataFrame, seed: int = 42, train_frac: float = 0.8):
+    """Split 80/20 por `lesion_id` (no por imagen) — algunas lesiones tienen
+    más de una foto, y mezclarlas entre train/valid sería fuga de datos.
+    Compartido entre el entrenamiento (train_model.py) y el registro del
+    modelo en MLflow (register_model.py) para que ambos evalúen sobre
+    exactamente el mismo split."""
+    unique_lesions = df["lesion_id"].unique()
+    rng = np.random.default_rng(seed)
+    rng.shuffle(unique_lesions)
+    n_train = int(len(unique_lesions) * train_frac)
+    train_lesions = set(unique_lesions[:n_train])
+    valid_lesions = set(unique_lesions[n_train:])
+    train_df = df[df["lesion_id"].isin(train_lesions)]
+    valid_df = df[df["lesion_id"].isin(valid_lesions)]
+    return train_df, valid_df
 
 
 def get_transforms(train: bool):
@@ -148,3 +168,50 @@ def grad_cam(model: nn.Module, pil_image: Image.Image, class_idx: int, device: s
     finally:
         h1.remove()
         h2.remove()
+
+
+def _image_to_base64(pil_image: Image.Image) -> str:
+    buf = io.BytesIO()
+    pil_image.convert("RGB").save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode("utf-8")
+
+
+def predict_via_endpoint(
+    pil_image: Image.Image,
+    host: str,
+    token: str,
+    endpoint_name: str,
+    timeout: float = 30.0,
+) -> tuple[dict, np.ndarray]:
+    """Llama al endpoint de Databricks Model Serving (última versión
+    promovida vía el alias `champion` en Unity Catalog) y devuelve
+    (probs, cam) — misma forma que predict_image()/grad_cam() locales, pero
+    calculado del lado del servidor por el modelo pyfunc (ver
+    scripts/mlflow_model.py). La app no necesita el peso del modelo local.
+
+    El servidor manda el Grad-CAM en la resolución nativa de layer4 (7x7
+    para input 224x224) para no inflar el payload — acá se reescala a
+    IMAGE_SIZE x IMAGE_SIZE para superponerlo sobre la imagen original.
+    """
+    url = f"{host.rstrip('/')}/serving-endpoints/{endpoint_name}/invocations"
+    payload = {
+        "dataframe_split": {
+            "columns": ["image_b64"],
+            "data": [[_image_to_base64(pil_image)]],
+        }
+    }
+    resp = requests.post(
+        url,
+        headers={"Authorization": f"Bearer {token}"},
+        json=payload,
+        timeout=timeout,
+    )
+    resp.raise_for_status()
+    prediction = resp.json()["predictions"][0]
+
+    probs = prediction["probs"]
+    cam_small = torch.tensor(prediction["gradcam"], dtype=torch.float32)[None, None]
+    cam = F.interpolate(
+        cam_small, size=(IMAGE_SIZE, IMAGE_SIZE), mode="bilinear", align_corners=False
+    )[0, 0]
+    return probs, cam.numpy()

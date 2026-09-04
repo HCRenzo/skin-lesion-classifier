@@ -1,0 +1,399 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Clasificador de lesiones de piel</title>
+<style>
+  :root {
+    --bg: #F1F5F9;
+    --card-bg: #FFFFFF;
+    --panel-bg: #F8FAFC;
+    --border: #E2E8F0;
+    --text: #1E293B;
+    --text-muted: #64748B;
+    --text-soft: #334155;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 2rem 1.5rem 4rem;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  .wrap { max-width: 980px; margin: 0 auto; }
+
+  .app-header {
+    background: #1E293B;
+    padding: 2rem 2.5rem;
+    border-radius: 10px;
+    margin-bottom: 1.5rem;
+  }
+  .app-header h1 { color: #fff; font-size: 1.9rem; font-weight: 700; margin: 0 0 0.4rem 0; }
+  .app-header p { color: #B8C4D9; font-size: 0.95rem; margin: 0; }
+
+  .disclaimer-box {
+    background: #FEF2F2;
+    border-left: 4px solid #DC2626;
+    border-radius: 6px;
+    padding: 0.9rem 1.1rem;
+    margin-bottom: 1.2rem;
+  }
+  .disclaimer-box strong { color: #991B1B; }
+  .disclaimer-box span { color: #7F1D1D; font-size: 0.9rem; }
+
+  .metric-strip { color: var(--text-muted); font-size: 0.85rem; margin-bottom: 0.6rem; line-height: 1.5; }
+  .metric-strip code { background: #E2E8F0; padding: 0.1rem 0.35rem; border-radius: 4px; }
+
+  .config-error {
+    background: #FEF2F2; border: 1px solid #FCA5A5; color: #991B1B;
+    border-radius: 8px; padding: 1rem 1.2rem; margin-bottom: 1.2rem; display: none;
+  }
+
+  .section-label {
+    text-transform: uppercase; letter-spacing: 0.04em; font-size: 0.78rem;
+    font-weight: 600; color: var(--text-muted); margin-bottom: 0.4rem;
+  }
+
+  .controls {
+    display: grid; grid-template-columns: 2fr 1fr; gap: 1rem;
+    margin: 1.5rem 0;
+  }
+  @media (max-width: 700px) { .controls { grid-template-columns: 1fr; } }
+
+  .upload-box {
+    border: 2px dashed var(--border); border-radius: 10px; padding: 1.2rem;
+    background: var(--card-bg); text-align: center; cursor: pointer;
+  }
+  .upload-box:hover { border-color: #94A3B8; }
+  .upload-box input { display: none; }
+
+  .sample-box {
+    background: var(--card-bg); border: 1px solid var(--border); border-radius: 10px;
+    padding: 1.2rem; display: flex; flex-direction: column; gap: 0.6rem; justify-content: center;
+  }
+  button {
+    font: inherit; cursor: pointer; border-radius: 8px; border: 1px solid var(--border);
+    background: #fff; padding: 0.55rem 1rem; color: var(--text);
+  }
+  button:hover { background: #F1F5F9; }
+  button.primary { background: #2563EB; border-color: #2563EB; color: #fff; }
+  button.primary:hover { background: #1D4ED8; }
+
+  .result { display: none; margin-top: 1.5rem; }
+  .grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1.2rem; }
+  @media (max-width: 800px) { .grid3 { grid-template-columns: 1fr; } }
+  .grid3 img, .grid3 canvas { width: 100%; border-radius: 8px; border: 1px solid var(--border); display: block; }
+
+  .pred-card { background: var(--panel-bg); border: 1px solid var(--border); border-radius: 10px; padding: 1.4rem; }
+  .pred-card h2 { font-size: 1.4rem; font-weight: 700; color: var(--text); margin: 0 0 0.3rem 0; }
+  .confidence-row { font-size: 0.95rem; color: var(--text-soft); margin-bottom: 0.9rem; }
+
+  .badge {
+    display: inline-block; padding: 0.3rem 0.7rem; border-radius: 999px;
+    font-size: 0.8rem; font-weight: 600; margin-top: 0.3rem;
+  }
+  .badge-alert { background: #FEF3C7; color: #92400E; }
+  .badge-match { background: #DCFCE7; color: #166534; }
+  .badge-mismatch { background: #FEE2E2; color: #991B1B; }
+
+  .probs { margin-top: 1.5rem; }
+  .prob-row { display: grid; grid-template-columns: 220px 1fr 48px; align-items: center; gap: 0.6rem; margin-bottom: 0.45rem; font-size: 0.88rem; }
+  .prob-bar-bg { background: #E2E8F0; border-radius: 4px; overflow: hidden; height: 14px; }
+  .prob-bar-fill { background: #2563EB; height: 100%; }
+
+  .limitations-box {
+    background: var(--panel-bg); border: 1px solid var(--border); border-radius: 10px;
+    padding: 1.3rem 1.5rem; margin-top: 1.5rem;
+  }
+  .limitations-box h3 { font-size: 1rem; font-weight: 700; color: var(--text); margin: 0 0 0.7rem 0; }
+  .limitations-box li { color: var(--text-soft); font-size: 0.92rem; margin-bottom: 0.5rem; }
+
+  .spinner { display: none; font-size: 0.9rem; color: var(--text-muted); margin-top: 0.8rem; }
+  .error-box { display: none; background: #FEF2F2; border: 1px solid #FCA5A5; color: #991B1B; border-radius: 8px; padding: 0.9rem 1.1rem; margin-top: 1rem; }
+
+  hr.divider { border: none; border-top: 1px solid var(--border); margin: 1.6rem 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="app-header">
+    <h1>Clasificador de lesiones de piel</h1>
+    <p>Clasificación de imágenes dermatoscópicas en 7 categorías, con transfer learning e interpretabilidad Grad-CAM</p>
+  </div>
+
+  <div class="disclaimer-box">
+    <strong>Demo educativo de deep learning — no es una herramienta de diagnóstico médico.</strong><br>
+    <span>El modelo tiene limitaciones reales y conocidas (ver más abajo). Ante cualquier lesión de piel real, consultá a un dermatólogo.</span>
+  </div>
+
+  <div class="metric-strip">
+    Entrenado sobre HAM10000 (~10,000 imágenes dermatoscópicas, 7 clases) con un ResNet18 pre-entrenado en ImageNet (transfer learning).
+    Accuracy de validación: 78% &nbsp;|&nbsp; F1 macro: 0.59 &nbsp;|&nbsp; Baseline (clase mayoritaria): 67% / 0.11
+  </div>
+  <div class="metric-strip">
+    Predicción servida por un endpoint de Databricks Model Serving, versionado con MLflow + Unity Catalog —
+    esta página siempre llama a la última versión promovida (alias <code>champion</code>).
+  </div>
+
+  <div id="configError" class="config-error"></div>
+
+  <div class="controls">
+    <label class="upload-box" id="uploadBox">
+      <div class="section-label">Subí una foto de la lesión</div>
+      <div style="color: var(--text-muted); font-size: 0.85rem;">jpg / png — click o arrastrá el archivo acá</div>
+      <input type="file" id="fileInput" accept="image/jpeg,image/png" />
+    </label>
+    <div class="sample-box">
+      <div class="section-label">¿No tenés una imagen a mano?</div>
+      <button id="sampleBtn">Usar una imagen de ejemplo</button>
+    </div>
+  </div>
+
+  <div class="spinner" id="spinner">Consultando el modelo en Databricks...</div>
+  <div class="error-box" id="errorBox"></div>
+
+  <div class="result" id="result">
+    <hr class="divider" />
+    <div class="grid3">
+      <div>
+        <div class="section-label">Imagen original</div>
+        <img id="origImg" alt="Imagen original" />
+      </div>
+      <div>
+        <div class="section-label">Grad-CAM (rojo = dónde miró el modelo)</div>
+        <canvas id="camCanvas"></canvas>
+      </div>
+      <div class="pred-card">
+        <div class="section-label">Predicción del modelo</div>
+        <h2 id="predClass"></h2>
+        <div class="confidence-row">Confianza: <strong id="predConf"></strong></div>
+        <div id="predBadges"></div>
+      </div>
+    </div>
+
+    <div class="probs">
+      <div class="section-label">Probabilidad por clase</div>
+      <div id="probsList"></div>
+    </div>
+
+    <div class="limitations-box">
+      <h3>Limitaciones — leer antes de confiar en el resultado</h3>
+      <ul>
+        <li><strong>El recall de melanoma (mel) es de solo 56%</strong> en validación — de cada 10 melanomas reales,
+        el modelo deja pasar ~4 como si fueran benignos. Es el error más peligroso posible para un
+        caso de uso real, y no está resuelto.</li>
+        <li>Las clases más raras del dataset (df, akiec, vasc) tienen pocos ejemplos
+        (22 a 56 en validación) — sus métricas son ruidosas.</li>
+        <li>Entrenado sobre un dataset de origen europeo (HAM10000) — no está validado en otras
+        poblaciones ni tipos de piel.</li>
+        <li>Es un modelo de clasificación de imágenes recortadas y centradas en la lesión, no de
+        detección en una foto general del cuerpo.</li>
+      </ul>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const CLASS_NAMES = ["akiec", "bcc", "bkl", "df", "mel", "nv", "vasc"];
+const CLASS_LABELS_ES = {
+  akiec: "Queratosis actínica / carcinoma intraepitelial",
+  bcc: "Carcinoma basocelular",
+  bkl: "Lesión benigna tipo queratosis",
+  df: "Dermatofibroma",
+  mel: "Melanoma",
+  nv: "Nevus melanocítico (lunar benigno)",
+  vasc: "Lesión vascular",
+};
+const CONCERNING_CLASSES = new Set(["akiec", "bcc", "mel"]);
+const MAX_DIM = 512; // reescalado client-side antes de mandar la imagen
+
+let sampleManifest = null;
+let currentTrueLabel = null;
+
+const fileInput = document.getElementById("fileInput");
+const uploadBox = document.getElementById("uploadBox");
+const sampleBtn = document.getElementById("sampleBtn");
+const spinner = document.getElementById("spinner");
+const errorBox = document.getElementById("errorBox");
+const resultEl = document.getElementById("result");
+const origImg = document.getElementById("origImg");
+const camCanvas = document.getElementById("camCanvas");
+const predClass = document.getElementById("predClass");
+const predConf = document.getElementById("predConf");
+const predBadges = document.getElementById("predBadges");
+const probsList = document.getElementById("probsList");
+const configError = document.getElementById("configError");
+
+fileInput.addEventListener("change", () => {
+  const file = fileInput.files[0];
+  if (!file) return;
+  currentTrueLabel = null;
+  const reader = new FileReader();
+  reader.onload = (e) => runPrediction(e.target.result);
+  reader.readAsDataURL(file);
+});
+
+sampleBtn.addEventListener("click", async () => {
+  try {
+    if (!sampleManifest) {
+      const resp = await fetch("samples/manifest.json");
+      sampleManifest = await resp.json();
+    }
+    const item = sampleManifest[Math.floor(Math.random() * sampleManifest.length)];
+    currentTrueLabel = item.dx;
+    const resp = await fetch(`samples/${item.file}`);
+    const blob = await resp.blob();
+    const reader = new FileReader();
+    reader.onload = (e) => runPrediction(e.target.result);
+    reader.readAsDataURL(blob);
+  } catch (err) {
+    showError("No se pudo cargar la imagen de ejemplo: " + err);
+  }
+});
+
+function showError(msg) {
+  errorBox.textContent = msg;
+  errorBox.style.display = "block";
+}
+
+function resizeToDataUrl(dataUrl, maxDim) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      let { width, height } = img;
+      if (width > height && width > maxDim) {
+        height = Math.round((height * maxDim) / width);
+        width = maxDim;
+      } else if (height > maxDim) {
+        width = Math.round((width * maxDim) / height);
+        height = maxDim;
+      }
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      canvas.getContext("2d").drawImage(img, 0, 0, width, height);
+      resolve({ dataUrl: canvas.toDataURL("image/jpeg", 0.9), width, height, imgEl: img });
+    };
+    img.src = dataUrl;
+  });
+}
+
+async function runPrediction(originalDataUrl) {
+  errorBox.style.display = "none";
+  resultEl.style.display = "none";
+  spinner.style.display = "block";
+
+  try {
+    const { dataUrl, imgEl } = await resizeToDataUrl(originalDataUrl, MAX_DIM);
+    const base64 = dataUrl.split(",")[1];
+
+    const resp = await fetch("api/predict", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ image_b64: base64 }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      throw new Error(data.error || `Error ${resp.status}`);
+    }
+
+    renderResult(imgEl, data.probs, data.gradcam);
+  } catch (err) {
+    showError("No se pudo obtener la predicción: " + err.message);
+  } finally {
+    spinner.style.display = "none";
+  }
+}
+
+function renderResult(imgEl, probs, gradcamGrid) {
+  origImg.src = imgEl.src;
+
+  const topClass = Object.keys(probs).reduce((a, b) => (probs[a] > probs[b] ? a : b));
+  const topProb = probs[topClass];
+
+  predClass.textContent = CLASS_LABELS_ES[topClass];
+  predConf.textContent = (topProb * 100).toFixed(0) + "%";
+
+  let badges = "";
+  if (CONCERNING_CLASSES.has(topClass)) {
+    badges += '<div class="badge badge-alert">Clase potencialmente maligna — consultar dermatólogo</div>';
+  }
+  if (currentTrueLabel) {
+    if (currentTrueLabel === topClass) {
+      badges += '<div class="badge badge-match">Coincide con la etiqueta real</div>';
+    } else {
+      badges += '<div class="badge badge-mismatch">No coincide con la etiqueta real</div>';
+    }
+    badges += `<div class="confidence-row" style="margin-top:0.6rem;">Etiqueta real: <strong>${CLASS_LABELS_ES[currentTrueLabel]}</strong></div>`;
+  }
+  predBadges.innerHTML = badges;
+
+  drawGradCam(imgEl, gradcamGrid);
+
+  const sorted = [...CLASS_NAMES].sort((a, b) => probs[b] - probs[a]);
+  probsList.innerHTML = sorted
+    .map((c) => {
+      const pct = (probs[c] * 100).toFixed(1);
+      return `<div class="prob-row">
+        <span>${CLASS_LABELS_ES[c]}</span>
+        <span class="prob-bar-bg"><span class="prob-bar-fill" style="width:${pct}%"></span></span>
+        <span>${pct}%</span>
+      </div>`;
+    })
+    .join("");
+
+  resultEl.style.display = "block";
+}
+
+// Superpone el grid de Grad-CAM (nativo 7x7, devuelto por el modelo) sobre
+// la imagen, reescalado por el propio canvas (drawImage con suavizado hace
+// las veces del bilinear upsample que antes hacía torch en el servidor).
+function drawGradCam(imgEl, grid) {
+  const w = imgEl.naturalWidth || imgEl.width;
+  const h = imgEl.naturalHeight || imgEl.height;
+  const gh = grid.length;
+  const gw = grid[0].length;
+
+  const small = document.createElement("canvas");
+  small.width = gw;
+  small.height = gh;
+  const sctx = small.getContext("2d");
+  const imgData = sctx.createImageData(gw, gh);
+  for (let y = 0; y < gh; y++) {
+    for (let x = 0; x < gw; x++) {
+      const v = Math.max(0, Math.min(1, grid[y][x]));
+      const idx = (y * gw + x) * 4;
+      imgData.data[idx] = Math.round(v * 255); // rojo
+      imgData.data[idx + 1] = 0;
+      imgData.data[idx + 2] = 0;
+      imgData.data[idx + 3] = Math.round(v * 255 * 0.6); // alpha
+    }
+  }
+  sctx.putImageData(imgData, 0, 0);
+
+  camCanvas.width = w;
+  camCanvas.height = h;
+  const ctx = camCanvas.getContext("2d");
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(imgEl, 0, 0, w, h);
+  ctx.drawImage(small, 0, 0, gw, gh, 0, 0, w, h);
+}
+
+// drag & drop sobre la caja de upload
+["dragover", "dragleave", "drop"].forEach((evt) => {
+  uploadBox.addEventListener(evt, (e) => e.preventDefault());
+});
+uploadBox.addEventListener("drop", (e) => {
+  const file = e.dataTransfer.files[0];
+  if (!file) return;
+  fileInput.files = e.dataTransfer.files;
+  fileInput.dispatchEvent(new Event("change"));
+});
+</script>
+</body>
+</html>

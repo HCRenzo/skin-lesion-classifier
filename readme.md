@@ -150,3 +150,129 @@ Subís una foto (o usás el botón de "imagen de ejemplo" para probar sin tener 
 ```
 
 Genera `images/distribucion_clases.png`, `images/predicciones_ejemplo.png` e `images/matriz_confusion.png` a partir del modelo ya entrenado.
+
+## Anexo: versionado y serving con MLflow + Databricks Free Edition
+
+El entrenamiento sigue siendo local (`train_model.py`, sin cambios). Lo que se agrega es un paso posterior: **versionar** ese checkpoint en el Model Registry de Unity Catalog vía MLflow, y **servirlo** desde un endpoint de Databricks Model Serving. La app (`app.py`) ya no carga `model/model.pt` directamente — llama al endpoint, que siempre sirve la última versión promovida (alias `champion`). El Grad-CAM también se calcula del lado del servidor (necesita gradientes internos del modelo, así que viaja empaquetado junto con la predicción — ver `scripts/mlflow_model.py`).
+
+```
+train_model.py (local)  →  register_model.py (versiona en MLflow/UC)  →  deploy_endpoint.py (promueve al endpoint)  →  app.py (llama al endpoint)
+```
+
+**Importante:** los pasos 1-3 de abajo son manuales, en la consola de Databricks — no tengo forma de crear una cuenta o generar un token por vos. Los nombres exactos de botones/menúes pueden variar levemente respecto a lo descrito acá (Databricks los cambia con cierta frecuencia); si algo no coincide, guiate por el nombre general (p. ej. "Access tokens" dentro de la configuración de usuario) en vez de la ruta exacta de clicks.
+
+### 1. Crear el workspace de Databricks Free Edition
+
+Entrar a [databricks.com](https://www.databricks.com/learn/free-edition) y crear una cuenta gratuita (Free Edition). Confirma el mail y entra al workspace.
+
+### 2. Confirmar el catálogo/schema de Unity Catalog
+
+Free Edition suele venir con un catálogo `main` y un schema `default` ya creados. Confirmarlo en **Catalog** (panel izquierdo) o, si no existen, crearlos desde un notebook/SQL editor:
+
+```sql
+CREATE CATALOG IF NOT EXISTS main;
+CREATE SCHEMA IF NOT EXISTS main.default;
+```
+
+Si usás otro catálogo/schema, ajustá la variable `UC_MODEL_NAME` en el paso 4 (formato `catalogo.schema.nombre_modelo`).
+
+### 3. Generar un Personal Access Token (PAT)
+
+Dentro del workspace: ícono de usuario (arriba a la derecha) → **Settings** → **Developer** → **Access tokens** → **Generate new token**. En "Scope" elegir **Other APIs**, y en "API scope(s)" agregar `mlflow`, `unity-catalog` y `model-serving`. Copiar el token (no se vuelve a mostrar).
+
+También necesitás la URL del workspace (`DATABRICKS_HOST`), el dominio que aparece en la barra del navegador, ej. `https://dbc-xxxxxxxx-yyyy.cloud.databricks.com`.
+
+### 4. Instalar dependencias y configurar variables de entorno
+
+```bash
+./env_skin/bin/pip install mlflow databricks-sdk
+
+export DATABRICKS_HOST="https://tu-workspace.cloud.databricks.com"
+export DATABRICKS_TOKEN="dapiXXXXXXXXXXXXXXXXXXXXXXXX"
+export UC_MODEL_NAME="main.default.skin_lesion_classifier"   # opcional, es el default
+export MODEL_ALIAS="champion"                                 # opcional, es el default
+export SERVING_ENDPOINT_NAME="skin-lesion-classifier"         # opcional, es el default
+```
+
+### 5. Versionar el modelo ya entrenado
+
+```bash
+./env_skin/bin/python scripts/register_model.py
+```
+
+Recalcula las métricas de validación, loguea el run en MLflow (params, F1/precision/recall por clase, matriz de confusión) y registra una nueva versión del modelo en `UC_MODEL_NAME`, moviendo el alias `champion` a esa versión. Correr esto de nuevo cada vez que se re-entrena el modelo (`train_model.py`) para versionar el nuevo checkpoint.
+
+### 6. Desplegar / promover el endpoint de serving
+
+```bash
+./env_skin/bin/python scripts/deploy_endpoint.py
+```
+
+Crea el endpoint la primera vez, o lo actualiza para que sirva la versión detrás del alias `champion` (la última registrada). Free Edition corre esto sobre compute serverless CPU (sin GPU) — para un ResNet18 en modo inferencia alcanza sin problema, aunque el primer request después de estar inactivo puede tardar por el *cold start* de `scale_to_zero`.
+
+### 7. Correr la app apuntando al endpoint
+
+```bash
+export DATABRICKS_HOST="https://tu-workspace.cloud.databricks.com"
+export DATABRICKS_TOKEN="dapiXXXXXXXXXXXXXXXXXXXXXXXX"
+export SERVING_ENDPOINT_NAME="skin-lesion-classifier"
+./env_skin/bin/streamlit run app.py
+```
+
+(Alternativa a las variables de entorno: crear `.streamlit/secrets.toml` con `DATABRICKS_HOST`, `DATABRICKS_TOKEN`, `SERVING_ENDPOINT_NAME` — útil si se despliega en Streamlit Community Cloud.)
+
+### Notas y límites de este anexo
+
+- No tengo acceso a Databricks para probar `register_model.py`/`deploy_endpoint.py` contra un workspace real — están escritos contra la API documentada de MLflow y `databricks-sdk`, pero los entitlements exactos de Free Edition (límites de compute, tamaños de `workload_size` disponibles, cuotas de Model Serving) cambian con el tiempo. Si un script falla, conviene revisar el mensaje de error contra la doc actual de Databricks antes de asumir que el código está mal.
+- Promover una versión es un paso de dos comandos (`register_model.py` luego `deploy_endpoint.py`), no automático — así se puede versionar sin desplegar (por ejemplo, para comparar métricas de varios runs antes de decidir cuál servir).
+- El endpoint no expone credenciales de Databricks a la app "gratis": `DATABRICKS_TOKEN` sigue siendo un secreto que hay que manejar con cuidado (no commitear, no loguear).
+
+## Anexo: sitio estático (Vercel) como frontend alternativo
+
+`app.py` (Streamlit) necesita un servidor Python — no se puede hostear en GitHub Pages. Para tener una versión pública sin depender de Streamlit Community Cloud, `web/` es una segunda implementación del mismo frontend como sitio estático (HTML/CSS/JS puro, sin build step) pensada para Vercel:
+
+```
+web/
+├── index.html          # UI (misma info que app.py: upload, Grad-CAM, probabilidades, limitaciones)
+├── api/predict.js       # función serverless: recibe la imagen, llama al endpoint de Databricks, devuelve la predicción
+└── samples/             # 14 imágenes de ejemplo (2 por clase) + manifest.json, para el botón "usar ejemplo"
+```
+
+`api/predict.js` es la pieza que importa: es la única parte que conoce `DATABRICKS_TOKEN` (como variable de entorno del proyecto en Vercel, nunca en el código ni en el navegador). El navegador solo le habla a `api/predict`, nunca directo a Databricks.
+
+### Desplegar
+
+1. En [vercel.com](https://vercel.com/new), importar el repo de GitHub.
+2. **Root Directory**: configurarlo en `web` (el proyecto vive en ese subdirectorio, no en la raíz del repo).
+3. Framework preset: **Other** (no hay build step, es HTML/JS estático + funciones serverless en `api/`).
+4. En **Environment Variables** del proyecto, agregar:
+   - `DATABRICKS_HOST`
+   - `DATABRICKS_TOKEN`
+   - `SERVING_ENDPOINT_NAME` (opcional, default `skin-lesion-classifier`)
+5. Deploy.
+
+Cada vez que se promueve una nueva versión del modelo (`register_model.py` + `deploy_endpoint.py`), el sitio no necesita ningún cambio ni redeploy — sigue llamando al mismo endpoint, que ahora sirve la versión nueva.
+
+### Notas
+
+- El Grad-CAM llega del servidor como grid 7x7 (igual que en `app.py`) y se reescala con `<canvas>` en el navegador — no hay ningún cálculo de gradientes en el cliente.
+- La imagen se reescala en el navegador (máx. 512px de lado) antes de mandarla, tanto para no pasarse del límite de tamaño de payload de las funciones serverless de Vercel como porque el modelo la termina reescalando a 224×224 igual.
+- No pude probar el deploy real en Vercel (no tengo una cuenta ahí) — si el import falla o el Root Directory no se detecta como esperaba, la causa más probable es algún default de Vercel que cambió desde que escribí esto.
+
+## Anexo: almacenamiento del dataset en Databricks (Unity Catalog)
+
+Además de versionar el modelo, el dataset HAM10000 también vive en Databricks (no solo en `data/` local), como para poder entrenar/reproducir todo sin depender de la carpeta local ni de volver a bajarlo de Kaggle:
+
+| Qué | Dónde | Cómo se creó |
+|---|---|---|
+| Imágenes (10,015 `.jpg`) | Volume `main.default.ham10000_data` (`/Volumes/main/default/ham10000_data/images/data/HAM10000_images_part_1/` y `.../part_2/`) | Subidas como un `.zip` vía Files API y descomprimidas server-side con un notebook/job (evita 10,015 llamadas individuales a la API). |
+| Metadata (`HAM10000_metadata.csv`) | Tabla Delta `main.default.ham10000_metadata` | `CREATE TABLE ... AS SELECT * FROM read_files(...)` sobre el CSV, ya subido al mismo Volume. |
+
+Verificación rápida (SQL Editor de Databricks, o vía `statement_execution` del SDK):
+
+```sql
+SELECT count(*), count(distinct lesion_id) FROM main.default.ham10000_metadata;
+-- 10015, 7470 (mismos números que la sección "Dataset" de este readme)
+```
+
+Esto es almacenamiento, no un cambio de pipeline: `train_model.py` y `register_model.py` siguen leyendo de `data/` local por defecto. Adaptarlos para leer directo del Volume/tabla Delta (en vez de la carpeta local) es el paso lógico siguiente si se quiere entrenar desde un notebook de Databricks en vez de localmente, pero no estaba en el alcance de lo pedido acá.
