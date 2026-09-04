@@ -8,6 +8,7 @@ Demo educativo — no es una herramienta de diagnóstico médico real.
 Correr con: ./env_skin/bin/streamlit run app.py
 """
 
+import os
 import random
 import sys
 from pathlib import Path
@@ -25,14 +26,27 @@ from skin_classifier import (
     CONCERNING_CLASSES,
     METADATA_FILE,
     find_image_path,
-    grad_cam,
-    load_model,
-    predict_image,
+    predict_via_endpoint,
 )
 
 st.set_page_config(page_title="Clasificador de lesiones de piel", layout="wide")
 
-load_model_cached = st.cache_resource(load_model)
+
+def get_config(key: str, default: str = "") -> str:
+    """Lee config primero de st.secrets (.streamlit/secrets.toml), después
+    de variables de entorno -- así funciona igual en local y en Streamlit
+    Community Cloud."""
+    try:
+        if key in st.secrets:
+            return st.secrets[key]
+    except Exception:
+        pass
+    return os.environ.get(key, default)
+
+
+DATABRICKS_HOST = get_config("DATABRICKS_HOST")
+DATABRICKS_TOKEN = get_config("DATABRICKS_TOKEN")
+SERVING_ENDPOINT_NAME = get_config("SERVING_ENDPOINT_NAME", "skin-lesion-classifier")
 
 
 @st.cache_data
@@ -197,6 +211,21 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+st.markdown(
+    f'<div class="metric-strip">Predicción servida por un endpoint de Databricks Model Serving '
+    f'(<code>{SERVING_ENDPOINT_NAME}</code>), versionado con MLflow + Unity Catalog -- '
+    "la app siempre llama a la última versión promovida (alias <code>champion</code>).</div>",
+    unsafe_allow_html=True,
+)
+
+if not DATABRICKS_HOST or not DATABRICKS_TOKEN:
+    st.error(
+        "Faltan las credenciales del endpoint (`DATABRICKS_HOST` / `DATABRICKS_TOKEN`). "
+        "Configuralas como variables de entorno o en `.streamlit/secrets.toml` -- "
+        "ver README -> Anexo: MLflow + Databricks."
+    )
+    st.stop()
+
 metadata = load_metadata()
 
 col_input, col_sample = st.columns([2, 1])
@@ -223,15 +252,17 @@ elif "sample_image_id" in st.session_state:
         true_label = st.session_state.get("sample_true_label")
 
 if image is not None:
-    device = "cpu"
-    model = load_model_cached()
+    try:
+        with st.spinner("Consultando el modelo en Databricks..."):
+            probs, cam = predict_via_endpoint(
+                image, host=DATABRICKS_HOST, token=DATABRICKS_TOKEN, endpoint_name=SERVING_ENDPOINT_NAME
+            )
+    except Exception as e:
+        st.error(f"No se pudo llamar al endpoint del modelo ({SERVING_ENDPOINT_NAME}): {e}")
+        st.stop()
 
-    probs = predict_image(model, image, device=device)
     top_class = max(probs, key=probs.get)
     top_prob = probs[top_class]
-
-    class_idx = CLASS_NAMES.index(top_class)
-    cam = grad_cam(model, image, class_idx, device=device)
     overlay = overlay_heatmap(image, cam)
 
     st.divider()

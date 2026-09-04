@@ -1,0 +1,169 @@
+#!/usr/bin/env python3
+"""Versiona el modelo ya entrenado (model/model.pt) en el Model Registry de
+Unity Catalog, usando MLflow con Databricks Free Edition como backend.
+
+Qué hace:
+  1. Recalcula métricas de validación (mismo split que el entrenamiento,
+     ver skin_classifier.train_valid_split).
+  2. Loguea un run en MLflow: params, métricas por clase, matriz de
+     confusión como artefacto.
+  3. Empaqueta el modelo como pyfunc (predicción + Grad-CAM, ver
+     mlflow_model.py) y lo registra como nueva versión en Unity Catalog.
+  4. Mueve el alias `champion` a esa nueva versión — es lo que
+     scripts/deploy_endpoint.py usa como "la última versión" para
+     promoverla al endpoint que llama la app.
+
+Requiere DATABRICKS_HOST y DATABRICKS_TOKEN en el entorno (ver README →
+Anexo: MLflow + Databricks).
+
+Uso: ./env_skin/bin/python scripts/register_model.py
+"""
+
+import os
+import sys
+from pathlib import Path
+
+import mlflow
+import pandas as pd
+import torch
+from mlflow.models import infer_signature
+from sklearn.metrics import classification_report, confusion_matrix
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from mlflow_model import SkinLesionPyfuncModel
+from skin_classifier import (
+    CLASS_NAMES,
+    METADATA_FILE,
+    MODEL_DIR,
+    SkinLesionDataset,
+    build_model,
+    train_valid_split,
+)
+
+UC_MODEL_NAME = os.environ.get("UC_MODEL_NAME", "main.default.skin_lesion_classifier")
+MODEL_ALIAS = os.environ.get("MODEL_ALIAS", "champion")
+EXPERIMENT_PATH = os.environ.get("MLFLOW_EXPERIMENT_PATH", "/Shared/skin-lesion-classifier")
+BATCH_SIZE = 32
+
+
+def evaluate(model, valid_loader):
+    model.eval()
+    all_preds, all_labels = [], []
+    with torch.no_grad():
+        for imgs, labels in valid_loader:
+            preds = model(imgs).argmax(dim=1).numpy()
+            all_preds.extend(preds)
+            all_labels.extend(labels.numpy())
+    report = classification_report(
+        all_labels, all_preds, target_names=CLASS_NAMES, zero_division=0, output_dict=True
+    )
+    cm = confusion_matrix(all_labels, all_preds)
+    return report, cm
+
+
+def main():
+    if not os.environ.get("DATABRICKS_HOST") or not os.environ.get("DATABRICKS_TOKEN"):
+        sys.exit(
+            "Faltan DATABRICKS_HOST y/o DATABRICKS_TOKEN en el entorno.\n"
+            "Ver README -> Anexo: MLflow + Databricks para cómo generarlos."
+        )
+
+    model_path = MODEL_DIR / "model.pt"
+    if not model_path.exists():
+        sys.exit(f"No existe {model_path} -- corré primero: ./env_skin/bin/python scripts/train_model.py")
+
+    mlflow.set_tracking_uri("databricks")
+    mlflow.set_registry_uri("databricks-uc")
+    mlflow.set_experiment(EXPERIMENT_PATH)
+
+    df = pd.read_csv(METADATA_FILE)
+    _, valid_df = train_valid_split(df, seed=42, train_frac=0.8)
+    valid_ds = SkinLesionDataset(valid_df, train=False)
+    valid_loader = torch.utils.data.DataLoader(valid_ds, batch_size=BATCH_SIZE, shuffle=False)
+
+    model = build_model(pretrained=False)
+    model.load_state_dict(torch.load(model_path, map_location="cpu"))
+
+    print("Evaluando checkpoint sobre el split de validación (lesion_id, seed=42)...")
+    report, cm = evaluate(model, valid_loader)
+    print(f"Accuracy: {report['accuracy']:.4f} | F1 macro: {report['macro avg']['f1-score']:.4f}")
+
+    with mlflow.start_run(run_name="resnet18-ham10000") as run:
+        mlflow.log_params(
+            {
+                "architecture": "resnet18",
+                "pretrained": "imagenet",
+                "num_classes": len(CLASS_NAMES),
+                "split": "80/20 por lesion_id, seed=42",
+            }
+        )
+        mlflow.log_metric("accuracy", report["accuracy"])
+        mlflow.log_metric("f1_macro", report["macro avg"]["f1-score"])
+        for cls in CLASS_NAMES:
+            mlflow.log_metric(f"f1_{cls}", report[cls]["f1-score"])
+            mlflow.log_metric(f"recall_{cls}", report[cls]["recall"])
+            mlflow.log_metric(f"precision_{cls}", report[cls]["precision"])
+
+        cm_path = Path("confusion_matrix.csv")
+        pd.DataFrame(cm, index=CLASS_NAMES, columns=CLASS_NAMES).to_csv(cm_path)
+        mlflow.log_artifact(str(cm_path))
+        cm_path.unlink()
+
+        # Firma del modelo: input = 1 columna con la imagen en base64,
+        # output = lista de {probs, gradcam} (ver mlflow_model.py).
+        sample_input = pd.DataFrame({"image_b64": ["<imagen PNG en base64>"]})
+        sample_output = [{"probs": {c: 0.0 for c in CLASS_NAMES}, "gradcam": [[0.0] * 7] * 7}]
+        signature = infer_signature(sample_input, sample_output)
+
+        # conda_env explícito (en vez de dejar que mlflow infiera python=3.9.6
+        # exacto del intérprete local): el canal conda privado de Databricks
+        # Model Serving no siempre tiene ese build exacto de Python -- fijar
+        # solo major.minor ("3.9") le da margen al solver para resolver.
+        conda_env = {
+            "channels": ["conda-forge"],
+            "dependencies": [
+                "python=3.9",
+                "pip",
+                {
+                    "pip": [
+                        "mlflow==3.1.4",
+                        "torch==2.8.0",
+                        "torchvision==0.23.0",
+                        "pillow",
+                        "pandas",
+                        "numpy",
+                        # skin_classifier.py (empaquetado vía code_paths) importa
+                        # `requests` a nivel de módulo -- sin esto, load_context()
+                        # falla en el servidor con "missing Python dependency".
+                        "requests",
+                    ]
+                },
+            ],
+            "name": "mlflow-env",
+        }
+
+        model_info = mlflow.pyfunc.log_model(
+            artifact_path="model",
+            python_model=SkinLesionPyfuncModel(),
+            artifacts={"weights": str(model_path)},
+            code_paths=[
+                str(Path(__file__).resolve().parent / "skin_classifier.py"),
+                str(Path(__file__).resolve().parent / "mlflow_model.py"),
+            ],
+            signature=signature,
+            input_example=sample_input,
+            conda_env=conda_env,
+        )
+
+        client = mlflow.MlflowClient()
+        mv = mlflow.register_model(model_uri=model_info.model_uri, name=UC_MODEL_NAME)
+        client.set_registered_model_alias(UC_MODEL_NAME, MODEL_ALIAS, mv.version)
+
+        print(f"\nRun: {run.info.run_id}")
+        print(f"Modelo registrado: {UC_MODEL_NAME} v{mv.version}")
+        print(f"Alias '{MODEL_ALIAS}' -> v{mv.version}")
+        print("\nSiguiente paso: ./env_skin/bin/python scripts/deploy_endpoint.py")
+
+
+if __name__ == "__main__":
+    main()

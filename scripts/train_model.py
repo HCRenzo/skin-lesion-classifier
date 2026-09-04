@@ -15,14 +15,20 @@ Uso: ./env_skin/bin/python scripts/train_model.py
 import sys
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
 from sklearn.metrics import classification_report, confusion_matrix
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from skin_classifier import CLASS_NAMES, METADATA_FILE, MODEL_DIR, SkinLesionDataset, build_model
+from skin_classifier import (
+    CLASS_NAMES,
+    METADATA_FILE,
+    MODEL_DIR,
+    SkinLesionDataset,
+    build_model,
+    train_valid_split,
+)
 
 EPOCHS = 15
 PATIENCE = 4
@@ -32,17 +38,8 @@ NUM_WORKERS = 2
 
 def main():
     df = pd.read_csv(METADATA_FILE)
-
-    unique_lesions = df["lesion_id"].unique()
-    rng = np.random.default_rng(42)
-    rng.shuffle(unique_lesions)
-    n_train = int(len(unique_lesions) * 0.8)
-    train_lesions = set(unique_lesions[:n_train])
-    valid_lesions = set(unique_lesions[n_train:])
-
-    train_df = df[df["lesion_id"].isin(train_lesions)]
-    valid_df = df[df["lesion_id"].isin(valid_lesions)]
-    print(f"Lesiones train: {len(train_lesions)} | valid: {len(valid_lesions)}")
+    train_df, valid_df = train_valid_split(df, seed=42, train_frac=0.8)
+    print(f"Lesiones train: {train_df['lesion_id'].nunique()} | valid: {valid_df['lesion_id'].nunique()}")
     print(f"Imágenes train: {len(train_df)} | valid: {len(valid_df)}")
 
     train_ds = SkinLesionDataset(train_df, train=True)
