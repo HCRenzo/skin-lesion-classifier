@@ -1,0 +1,7 @@
+[lint]
+# E/F = pycodestyle + pyflakes (errores reales: imports sin usar, nombres
+# indefinidos, sintaxis). I = orden de imports. Nada de reglas de estilo
+# opinadas (S/BLE/PLR/RUF/EXE) -- CI para pescar bugs, no para litigar
+# convenciones.
+select = ["E", "F", "I"]
+ignore = ["E501"]  # largo de línea -- no vale la pena en este repo

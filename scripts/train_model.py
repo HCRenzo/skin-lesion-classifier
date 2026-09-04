@@ -12,6 +12,7 @@ dataset, df es 1.1%).
 Uso: ./env_skin/bin/python scripts/train_model.py
 """
 
+import os
 import sys
 from pathlib import Path
 
@@ -30,15 +31,34 @@ from skin_classifier import (
     train_valid_split,
 )
 
-EPOCHS = 15
-PATIENCE = 4
+# Overrideables por env var -- usado para smoke tests del pipeline de CT
+# (ej. HAM10000_EPOCHS=1) sin tener que esperar un entrenamiento completo.
+# En producción, dejar los defaults.
+EPOCHS = int(os.environ.get("HAM10000_EPOCHS", 15))
+PATIENCE = int(os.environ.get("HAM10000_PATIENCE", 4))
 BATCH_SIZE = 32
-NUM_WORKERS = 2
+# Los workers del DataLoader usan multiprocessing con memoria compartida
+# (/dev/shm) -- el contenedor serverless de un Job de Databricks la tiene
+# muy restringida y los workers mueren con "Bus error" si NUM_WORKERS > 0.
+# Local (Mac/tu máquina) sí tiene memoria compartida normal, por eso el
+# default sigue siendo 2 ahí.
+_default_workers = 0 if os.environ.get("DATABRICKS_RUNTIME_VERSION") else 2
+NUM_WORKERS = int(os.environ.get("HAM10000_NUM_WORKERS", _default_workers))
+
+# Recortar el dataset a N imágenes (por split) -- solo para smoke tests
+# rápidos del pipeline completo (CT) sin esperar leer/entrenar sobre el
+# dataset entero desde el Volume. Vacío/no seteada = dataset completo.
+MAX_SAMPLES = os.environ.get("HAM10000_MAX_SAMPLES")
 
 
 def main():
     df = pd.read_csv(METADATA_FILE)
     train_df, valid_df = train_valid_split(df, seed=42, train_frac=0.8)
+    if MAX_SAMPLES:
+        n = int(MAX_SAMPLES)
+        train_df = train_df.sample(min(n, len(train_df)), random_state=42)
+        valid_df = valid_df.sample(min(n, len(valid_df)), random_state=42)
+        print(f"HAM10000_MAX_SAMPLES={n} -- recortando dataset (smoke test, no usar para producción)")
     print(f"Lesiones train: {train_df['lesion_id'].nunique()} | valid: {valid_df['lesion_id'].nunique()}")
     print(f"Imágenes train: {len(train_df)} | valid: {len(valid_df)}")
 

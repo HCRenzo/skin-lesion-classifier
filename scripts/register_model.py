@@ -45,6 +45,13 @@ MODEL_ALIAS = os.environ.get("MODEL_ALIAS", "champion")
 EXPERIMENT_PATH = os.environ.get("MLFLOW_EXPERIMENT_PATH", "/Shared/skin-lesion-classifier")
 BATCH_SIZE = 32
 
+# Gate de calidad (patrón champion/challenger): no mover el alias `champion`
+# a la versión nueva si es peor que la actual en esta métrica -- evita que
+# un reentrenamiento con peor suerte (o un bug) pise silenciosamente al
+# modelo que está sirviendo la app. FORCE_PROMOTE=1 lo saltea.
+GATE_METRIC = os.environ.get("GATE_METRIC", "f1_macro")
+FORCE_PROMOTE = os.environ.get("FORCE_PROMOTE", "").lower() in ("1", "true", "yes")
+
 
 def evaluate(model, valid_loader):
     model.eval()
@@ -62,7 +69,14 @@ def evaluate(model, valid_loader):
 
 
 def main():
-    if not os.environ.get("DATABRICKS_HOST") or not os.environ.get("DATABRICKS_TOKEN"):
+    # Corriendo dentro de un cluster/job de Databricks, la autenticación es
+    # implícita (no hace falta host/token) -- DATABRICKS_RUNTIME_VERSION
+    # solo existe ahí. Fuera de Databricks (tu máquina, GitHub Actions),
+    # sí hacen falta explícitos.
+    running_in_databricks = bool(os.environ.get("DATABRICKS_RUNTIME_VERSION"))
+    if not running_in_databricks and (
+        not os.environ.get("DATABRICKS_HOST") or not os.environ.get("DATABRICKS_TOKEN")
+    ):
         sys.exit(
             "Faltan DATABRICKS_HOST y/o DATABRICKS_TOKEN en el entorno.\n"
             "Ver README -> Anexo: MLflow + Databricks para cómo generarlos."
@@ -78,6 +92,9 @@ def main():
 
     df = pd.read_csv(METADATA_FILE)
     _, valid_df = train_valid_split(df, seed=42, train_frac=0.8)
+    max_samples = os.environ.get("HAM10000_MAX_SAMPLES")
+    if max_samples:
+        valid_df = valid_df.sample(min(int(max_samples), len(valid_df)), random_state=42)
     valid_ds = SkinLesionDataset(valid_df, train=False)
     valid_loader = torch.utils.data.DataLoader(valid_ds, batch_size=BATCH_SIZE, shuffle=False)
 
@@ -88,6 +105,26 @@ def main():
     report, cm = evaluate(model, valid_loader)
     print(f"Accuracy: {report['accuracy']:.4f} | F1 macro: {report['macro avg']['f1-score']:.4f}")
 
+    new_metrics = {"accuracy": report["accuracy"], "f1_macro": report["macro avg"]["f1-score"]}
+    for cls in CLASS_NAMES:
+        new_metrics[f"f1_{cls}"] = report[cls]["f1-score"]
+        new_metrics[f"recall_{cls}"] = report[cls]["recall"]
+        new_metrics[f"precision_{cls}"] = report[cls]["precision"]
+
+    # Gate: comparar contra el champion actual (si existe) antes de decidir
+    # si esta versión nueva merece quedar sirviendo en el endpoint.
+    client = mlflow.MlflowClient()
+    current_metric = None
+    try:
+        current_mv = client.get_model_version_by_alias(UC_MODEL_NAME, MODEL_ALIAS)
+        current_run = client.get_run(current_mv.run_id)
+        current_metric = current_run.data.metrics.get(GATE_METRIC)
+        print(f"Champion actual: {UC_MODEL_NAME}@{MODEL_ALIAS} = v{current_mv.version} ({GATE_METRIC}={current_metric})")
+    except Exception:
+        print(f"No hay alias '{MODEL_ALIAS}' todavía -- esta va a ser la primera versión registrada.")
+
+    should_promote = FORCE_PROMOTE or current_metric is None or new_metrics[GATE_METRIC] >= current_metric
+
     with mlflow.start_run(run_name="resnet18-ham10000") as run:
         mlflow.log_params(
             {
@@ -97,12 +134,8 @@ def main():
                 "split": "80/20 por lesion_id, seed=42",
             }
         )
-        mlflow.log_metric("accuracy", report["accuracy"])
-        mlflow.log_metric("f1_macro", report["macro avg"]["f1-score"])
-        for cls in CLASS_NAMES:
-            mlflow.log_metric(f"f1_{cls}", report[cls]["f1-score"])
-            mlflow.log_metric(f"recall_{cls}", report[cls]["recall"])
-            mlflow.log_metric(f"precision_{cls}", report[cls]["precision"])
+        for name, value in new_metrics.items():
+            mlflow.log_metric(name, value)
 
         cm_path = Path("confusion_matrix.csv")
         pd.DataFrame(cm, index=CLASS_NAMES, columns=CLASS_NAMES).to_csv(cm_path)
@@ -155,14 +188,22 @@ def main():
             conda_env=conda_env,
         )
 
-        client = mlflow.MlflowClient()
         mv = mlflow.register_model(model_uri=model_info.model_uri, name=UC_MODEL_NAME)
-        client.set_registered_model_alias(UC_MODEL_NAME, MODEL_ALIAS, mv.version)
 
         print(f"\nRun: {run.info.run_id}")
         print(f"Modelo registrado: {UC_MODEL_NAME} v{mv.version}")
-        print(f"Alias '{MODEL_ALIAS}' -> v{mv.version}")
-        print("\nSiguiente paso: ./env_skin/bin/python scripts/deploy_endpoint.py")
+
+        if should_promote:
+            client.set_registered_model_alias(UC_MODEL_NAME, MODEL_ALIAS, mv.version)
+            print(f"Alias '{MODEL_ALIAS}' -> v{mv.version} (promovido)")
+            print("\nSiguiente paso: ./env_skin/bin/python scripts/deploy_endpoint.py")
+        else:
+            print(
+                f"NO promovido: {GATE_METRIC}={new_metrics[GATE_METRIC]:.4f} es peor que el "
+                f"champion actual ({current_metric:.4f}). Queda registrado como v{mv.version} "
+                f"pero '{MODEL_ALIAS}' sigue en la versión anterior.\n"
+                f"(Forzar con FORCE_PROMOTE=1 si igual querés promoverlo.)"
+            )
 
 
 if __name__ == "__main__":

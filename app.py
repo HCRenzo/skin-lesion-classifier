@@ -19,7 +19,6 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 from PIL import Image
-
 from skin_classifier import (
     CLASS_LABELS_ES,
     CLASS_NAMES,

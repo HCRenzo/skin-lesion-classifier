@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt ruff
+
+      - name: Sintaxis (py_compile)
+        run: |
+          python -m py_compile app.py scripts/*.py
+
+      - name: Lint (ruff)
+        run: ruff check app.py scripts/ tests/ --output-format=github
+
+      - name: Tests (smoke tests, sin datos reales ni Databricks)
+        run: python -m pytest tests/ -v

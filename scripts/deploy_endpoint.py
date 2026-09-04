@@ -36,7 +36,12 @@ WORKLOAD_SIZE = os.environ.get("SERVING_WORKLOAD_SIZE", "Small")
 
 
 def main():
-    if not os.environ.get("DATABRICKS_HOST") or not os.environ.get("DATABRICKS_TOKEN"):
+    # Dentro de un cluster/job de Databricks la autenticación es implícita
+    # (ver misma nota en register_model.py).
+    running_in_databricks = bool(os.environ.get("DATABRICKS_RUNTIME_VERSION"))
+    if not running_in_databricks and (
+        not os.environ.get("DATABRICKS_HOST") or not os.environ.get("DATABRICKS_TOKEN")
+    ):
         sys.exit(
             "Faltan DATABRICKS_HOST y/o DATABRICKS_TOKEN en el entorno.\n"
             "Ver README -> Anexo: MLflow + Databricks."
@@ -74,7 +79,7 @@ def main():
             served_entities=[served_entity],
         )
 
-    host = os.environ["DATABRICKS_HOST"].rstrip("/")
+    host = w.config.host.rstrip("/")
     print("\nListo. La app debe apuntar a:")
     print(f"  SERVING_ENDPOINT_NAME={ENDPOINT_NAME}")
     print(f"  URL de invocación: {host}/serving-endpoints/{ENDPOINT_NAME}/invocations")
