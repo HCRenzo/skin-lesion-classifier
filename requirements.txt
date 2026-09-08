@@ -1,0 +1,15 @@
+# Versiones probadas localmente y en el endpoint de Databricks -- no
+# aflojar sin volver a correr los tests y redeployar el modelo (el
+# conda_env de scripts/register_model.py pinea torch/torchvision a estas
+# mismas versiones porque el servidor necesita coincidir exacto).
+torch==2.8.0
+torchvision==0.23.0
+pillow==11.3.0
+pandas==2.3.3
+numpy==2.0.2
+scikit-learn==1.6.1
+requests==2.32.5
+streamlit==1.50.0
+mlflow==3.1.4
+databricks-sdk==0.102.0
+pytest==8.4.2

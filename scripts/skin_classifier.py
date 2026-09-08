@@ -4,6 +4,7 @@ carga de modelo. Usado por el script de entrenamiento y la web."""
 
 import base64
 import io
+import os
 from pathlib import Path
 
 import numpy as np
@@ -16,10 +17,21 @@ from PIL import Image
 from torchvision import models, transforms
 
 PROJECT_DIR = Path(__file__).resolve().parents[1]
-DATA_DIR = PROJECT_DIR / "data"
-MODEL_DIR = PROJECT_DIR / "model"
-METADATA_FILE = DATA_DIR / "HAM10000_metadata.csv"
-IMAGE_DIRS = [DATA_DIR / "HAM10000_images_part_1", DATA_DIR / "HAM10000_images_part_2"]
+
+# Paths configurables por variable de entorno: localmente apuntan a data/ y
+# model/ del repo (default); en un Job de Databricks se pisan para apuntar
+# al Volume de Unity Catalog (/Volumes/main/default/ham10000_data/...) --
+# así el mismo train_model.py corre sin cambios en las dos plataformas.
+# Ver Anexo "CI/CD/CT" del readme.
+DATA_DIR = Path(os.environ.get("HAM10000_DATA_DIR", str(PROJECT_DIR / "data")))
+MODEL_DIR = Path(os.environ.get("HAM10000_MODEL_DIR", str(PROJECT_DIR / "model")))
+METADATA_FILE = Path(os.environ.get("HAM10000_METADATA_FILE", str(DATA_DIR / "HAM10000_metadata.csv")))
+_image_dirs_env = os.environ.get("HAM10000_IMAGE_DIRS")
+IMAGE_DIRS = (
+    [Path(p) for p in _image_dirs_env.split(":") if p]
+    if _image_dirs_env
+    else [DATA_DIR / "HAM10000_images_part_1", DATA_DIR / "HAM10000_images_part_2"]
+)
 
 # Orden fijo y alfabético — tiene que ser el mismo en train y en inferencia.
 CLASS_NAMES = ["akiec", "bcc", "bkl", "df", "mel", "nv", "vasc"]

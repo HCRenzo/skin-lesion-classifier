@@ -70,7 +70,7 @@ class SkinLesionPyfuncModel(mlflow.pyfunc.PythonModel):
             h2.remove()
 
         return {
-            "probs": {self.class_names[i]: float(probs[i]) for i in range(len(self.class_names))},
+            "probs": {self.class_names[i]: float(probs[i].detach()) for i in range(len(self.class_names))},
             # Resolución nativa de layer4 (7x7 para input 224x224), no
             # 224x224 — reduce el payload de la respuesta ~1000x. El
             # cliente la reescala (ver predict_via_endpoint en

@@ -275,4 +275,70 @@ SELECT count(*), count(distinct lesion_id) FROM main.default.ham10000_metadata;
 -- 10015, 7470 (mismos números que la sección "Dataset" de este readme)
 ```
 
-Esto es almacenamiento, no un cambio de pipeline: `train_model.py` y `register_model.py` siguen leyendo de `data/` local por defecto. Adaptarlos para leer directo del Volume/tabla Delta (en vez de la carpeta local) es el paso lógico siguiente si se quiere entrenar desde un notebook de Databricks en vez de localmente, pero no estaba en el alcance de lo pedido acá.
+`train_model.py`/`register_model.py` siguen leyendo de `data/` local por defecto (nada cambia si los corrés en tu máquina) -- pero ahora también saben leer del Volume cuando corren dentro de Databricks (ver Anexo "CI/CD/CT" de abajo), vía las mismas variables de entorno.
+
+## Anexo: CI/CD/CT (GitHub Actions + Job de Databricks)
+
+Los anexos anteriores dejan todo el pipeline (dataset, modelo, endpoint, app) armado pero operado a mano: entrenás localmente, corrés `register_model.py` y `deploy_endpoint.py` vos mismo. Este anexo lo cierra con automatización real:
+
+| | Qué hace | Dónde vive |
+|---|---|---|
+| **CI** | En cada PR: sintaxis, lint (`ruff`), y tests de humo (split de datos, arquitectura, wrapper Grad-CAM) con datos sintéticos -- rápido, sin pegarle a Databricks ni necesitar el dataset real. | `.github/workflows/ci.yml` |
+| **CD** | Cuando cambia algo en `scripts/` en `main`: sincroniza ese código al Workspace de Databricks y actualiza la definición del Job de entrenamiento. También se puede disparar un run manual desde la pestaña *Actions* de GitHub. | `.github/workflows/retrain.yml` |
+| **CT** | Un Job de Databricks (`skin-lesion-classifier-ct`), programado semanal (domingos 03:00 UTC), que entrena leyendo directo del Volume/tabla Delta, evalúa, y solo promueve la versión nueva si supera al `champion` actual en `f1_macro` (si no, queda registrada pero sin servir). | Job en Databricks + `scripts/ct_pipeline.py` |
+
+### Cómo encajan las piezas
+
+```
+push a scripts/ en main
+        │
+        ▼
+.github/workflows/retrain.yml (GitHub Actions)
+        │  sync_to_databricks.py (sube scripts/*.py al Workspace)
+        │  create_ct_job.py (actualiza el Job + su schedule)
+        ▼
+Job "skin-lesion-classifier-ct" en Databricks
+ (dispara solo, cron semanal -- o a mano)
+        │
+        ▼
+ct_pipeline.py (notebook de entrada del Job)
+        │  1. train_model.py   -- lee el Volume, entrena, guarda model.pt en el Volume
+        │  2. register_model.py -- evalúa, loguea en MLflow, compara contra el champion
+        │                          actual (gate), promueve el alias `champion` solo si
+        │                          mejora
+        │  3. deploy_endpoint.py -- actualiza el endpoint a la versión detrás de `champion`
+        ▼
+Endpoint de Databricks Model Serving (siempre la misma URL)
+        │
+        ▼
+app.py (Streamlit) / web/ (Vercel) -- sin cambios, siguen llamando al mismo endpoint
+```
+
+La app y el sitio de Vercel nunca se enteran de que hubo un reentrenamiento -- siguen pegándole a la misma URL de endpoint, que ahora sirve la versión nueva. Eso es lo que hace que esto sea CD de verdad y no un paso manual más.
+
+### Paths configurables (mismo código, dos entornos)
+
+`scripts/skin_classifier.py` lee `DATA_DIR`/`METADATA_FILE`/`IMAGE_DIRS`/`MODEL_DIR` de variables de entorno (`HAM10000_DATA_DIR`, etc.), con el mismo default de siempre (`data/` local) si no están seteadas. `ct_pipeline.py` las pisa para apuntar al Volume antes de importar `train_model`/`register_model`/`deploy_endpoint` -- así es literalmente el mismo código el que corre en tu laptop y en el Job de Databricks, sin `if` de por medio.
+
+### Setup (una sola vez)
+
+```bash
+# 1. Subir el código y crear el Job (local, con tus credenciales de siempre)
+./env_skin/bin/python scripts/sync_to_databricks.py
+./env_skin/bin/python scripts/create_ct_job.py
+
+# 2. Secrets en GitHub (Settings -> Secrets and variables -> Actions):
+#    DATABRICKS_HOST, DATABRICKS_TOKEN
+```
+
+Con eso: cada push a `scripts/**` en `main` re-sincroniza el Job vía Actions, el Job corre solo cada domingo, y también podés ir a la pestaña *Actions* → *Retrain / promote model* → *Run workflow* para dispararlo manualmente (dejando `epochs` vacío para producción, o poniendo `1`-`2` para un smoke test rápido del pipeline entero).
+
+### El gate de calidad, en la práctica
+
+`register_model.py` no promueve un modelo nuevo a ciegas: compara `f1_macro` (configurable con `GATE_METRIC`) contra el run detrás del alias `champion` actual, y solo mueve el alias si es igual o mejor. Si un reentrenamiento sale peor (menos datos limpios esa semana, un hiperparámetro tocado sin querer, lo que sea), queda registrado como una versión más en Unity Catalog -- para inspeccionarlo -- pero el endpoint sigue sirviendo la versión anterior. `FORCE_PROMOTE=1` lo saltea si alguna vez hace falta promover a mano igual.
+
+### Límites de esto
+
+- **CPU, no GPU**: Free Edition sirve compute serverless CPU. Fine-tuning de ResNet18 sobre ~10k imágenes con la config completa (15 epochs, early stopping) tarda bastante más que en una GPU -- razonable para un cron semanal, no para iterar rápido. `HAM10000_EPOCHS=1` (vía el input `epochs` del workflow, o la env var directo) sirve para probar que el pipeline entero funciona sin esperar un entrenamiento real.
+- El Job fue probado end-to-end con `epochs=1` (smoke test) contra el workspace real -- no corrí acá un ciclo completo de producción (15 epochs) para no consumir horas de cómputo de más; la mecánica es la misma, solo cambia cuánto tarda.
+- No hay notificación (mail/Slack) si el Job falla o si el gate rechaza una versión -- `email_notifications`/`webhook_notifications` de la API de Jobs son el próximo paso natural si esto se usa en serio.

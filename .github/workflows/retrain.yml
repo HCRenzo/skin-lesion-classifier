@@ -1,0 +1,65 @@
+name: Retrain / promote model (CD + CT)
+
+on:
+  # CD: cada vez que cambia el código del pipeline en main, re-sincroniza
+  # el Job de Databricks con la última versión (no dispara un training run
+  # -- eso lo hace el schedule del propio Job en Databricks, o "Run manual"
+  # abajo).
+  push:
+    branches: [main]
+    paths:
+      - "scripts/**"
+      - ".github/workflows/retrain.yml"
+
+  # Disparo manual desde la pestaña Actions de GitHub -- "Run workflow".
+  # `epochs` en blanco = config completa (producción); en 1-2 sirve como
+  # smoke test rápido del pipeline entero sin esperar un training real.
+  workflow_dispatch:
+    inputs:
+      epochs:
+        description: "Epochs (vacío = default de producción, 15)"
+        required: false
+        default: ""
+      max_samples:
+        description: "Recortar dataset a N imágenes por split (vacío = dataset completo; usar para smoke tests)"
+        required: false
+        default: ""
+      wait:
+        description: "Esperar a que termine el run"
+        type: boolean
+        default: true
+
+jobs:
+  sync-and-maybe-run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependencias (livianas -- no hace falta torch acá)
+        run: pip install databricks-sdk mlflow
+
+      - name: Sincronizar scripts/ al Workspace de Databricks
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        run: python scripts/sync_to_databricks.py
+
+      - name: Actualizar definición del Job (schedule, notebook de entrada)
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        run: python scripts/create_ct_job.py
+
+      - name: Disparar run manual
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+          HAM10000_EPOCHS: ${{ github.event.inputs.epochs }}
+          HAM10000_MAX_SAMPLES: ${{ github.event.inputs.max_samples }}
+          CT_WAIT: ${{ github.event.inputs.wait == 'true' && '1' || '0' }}
+        run: python scripts/trigger_ct_job.py

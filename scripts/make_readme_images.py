@@ -11,7 +11,6 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import torch
 from PIL import Image
 from sklearn.metrics import confusion_matrix
 
@@ -44,8 +43,6 @@ def make_prediction_grid(df, model):
     """3 ejemplos: uno bien clasificado de la clase mayoritaria, uno de una
     clase rara bien clasificado, y un melanoma para mostrar la limitación
     conocida (recall bajo) con transparencia."""
-    rng = np.random.default_rng(7)
-
     examples = []
     # Un nv (benigno) bien clasificado
     nv_rows = df[df["dx"] == "nv"]
