@@ -11,10 +11,16 @@ Uso:
 
 import os
 import sys
+from datetime import timedelta
 
 from databricks.sdk import WorkspaceClient
 
 JOB_NAME = os.environ.get("CT_JOB_NAME", "skin-lesion-classifier-ct")
+# Wait.result() por default corta a los 20 min -- eso es un timeout del
+# cliente esperando, no del Job (que tiene su propio timeout_seconds=3h en
+# create_ct_job.py). Un entrenamiento de producción real tranquilamente
+# supera 20 min, así que hay que darle más margen acá que al Job mismo.
+WAIT_TIMEOUT = timedelta(hours=4)
 
 
 def main():
@@ -48,7 +54,7 @@ def main():
         return
 
     print("Esperando a que termine (puede tardar si entrena la config completa)...")
-    run = waiter.result()
+    run = waiter.result(timeout=WAIT_TIMEOUT)
     result_state = run.state.result_state
     print(f"Resultado: {result_state}")
     if result_state is not None and "SUCCESS" not in str(result_state):
