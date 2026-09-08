@@ -1,4 +1,4 @@
-name: Retrain / promote model (CD + CT)
+name: CD/CT: Model Retraining Pipeline
 
 on:
   # CD: cada vez que cambia el código del pipeline en main, re-sincroniza
