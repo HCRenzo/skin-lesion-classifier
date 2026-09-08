@@ -61,10 +61,20 @@ def evaluate(model, valid_loader):
             preds = model(imgs).argmax(dim=1).numpy()
             all_preds.extend(preds)
             all_labels.extend(labels.numpy())
+    # labels=range(...) explícito: sin esto, si una muestra chica (smoke
+    # test con HAM10000_MAX_SAMPLES) no incluye las 7 clases por azar,
+    # tanto classification_report como confusion_matrix explotan o
+    # devuelven una matriz de menor tamaño que CLASS_NAMES.
+    all_class_ids = list(range(len(CLASS_NAMES)))
     report = classification_report(
-        all_labels, all_preds, target_names=CLASS_NAMES, zero_division=0, output_dict=True
+        all_labels,
+        all_preds,
+        labels=all_class_ids,
+        target_names=CLASS_NAMES,
+        zero_division=0,
+        output_dict=True,
     )
-    cm = confusion_matrix(all_labels, all_preds)
+    cm = confusion_matrix(all_labels, all_preds, labels=all_class_ids)
     return report, cm
 
 

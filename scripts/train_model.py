@@ -150,11 +150,19 @@ def main():
             all_preds.extend(preds)
             all_labels.extend(labels.numpy())
 
+    # labels=range(...) explícito: con HAM10000_MAX_SAMPLES chico (smoke
+    # tests) una muestra puede no incluir las 7 clases por azar, y sin esto
+    # classification_report/confusion_matrix explotan o devuelven menos filas.
+    all_class_ids = list(range(len(CLASS_NAMES)))
     print("\n=== Classification report (validación) ===")
-    print(classification_report(all_labels, all_preds, target_names=CLASS_NAMES, zero_division=0))
+    print(
+        classification_report(
+            all_labels, all_preds, labels=all_class_ids, target_names=CLASS_NAMES, zero_division=0
+        )
+    )
     print("=== Matriz de confusión ===")
     print("Filas = real, columnas = predicho. Orden:", CLASS_NAMES)
-    print(confusion_matrix(all_labels, all_preds))
+    print(confusion_matrix(all_labels, all_preds, labels=all_class_ids))
 
 
 if __name__ == "__main__":
