@@ -1,5 +1,8 @@
 {
   "buildCommand": "",
   "outputDirectory": ".",
-  "framework": null
+  "framework": null,
+  "functions": {
+    "api/predict.js": { "maxDuration": 60 }
+  }
 }

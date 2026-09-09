@@ -95,7 +95,7 @@ def main():
         task_key="train_register_deploy",
         notebook_task=NotebookTask(notebook_path=ENTRYPOINT_NOTEBOOK_PATH),
         environment_key=environment_key,
-        timeout_seconds=3 * 60 * 60,  # 3h -- fine-tuning de ResNet18 en CPU serverless
+        timeout_seconds=5 * 60 * 60,  # 5h -- fine-tuning de ResNet18 en CPU serverless
     )
     schedule = CronSchedule(
         quartz_cron_expression=CRON_SCHEDULE, timezone_id=CRON_TIMEZONE, pause_status=PauseStatus.UNPAUSED

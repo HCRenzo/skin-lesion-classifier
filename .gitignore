@@ -9,3 +9,7 @@ mlruns/
 .env
 .env.*
 !.env.example
+
+guion-presentacion.md
+presentation.html
+web/pipeline-diagram.html

@@ -68,3 +68,9 @@ module.exports = async (req, res) => {
     res.status(500).json({ error: String(err) });
   }
 };
+
+// El endpoint de Databricks tiene scale_to_zero_enabled=true: si estuvo
+// inactivo, la primera llamada lo "despierta" y puede tardar bastante más
+// que el límite default de una función de Vercel (10s). Sin esto, Vercel
+// corta la función antes de que Databricks termine de responder.
+module.exports.config = { maxDuration: 60 };
